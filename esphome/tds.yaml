@@ -1,0 +1,174 @@
+esphome:
+  name: tds
+  friendly_name: tds
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+
+#replace this
+api:
+  encryption:
+    key: "xxxx0TBjjbJGeVzVaQmsPeCdkCbJKcyfDbPXFt5Gw="
+
+#replace this
+ota:
+  password: "aaaabbbb8c02118b530cef683deeda0e"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "tds Fallback Hotspot"
+    password: "uxkBXRl5GNY5"
+
+captive_portal:
+
+font:
+  - file: "Roboto-Medium.ttf"
+    id: sz_10
+    size: 10
+    glyphs: 'TDSICAKL: BZ'
+  - file: "Roboto-Medium.ttf"
+    id: sz_20
+    size: 20
+    glyphs: '0123456789.napm°- '
+
+display:
+  - platform: ssd1306_i2c
+    id: ekran
+    i2c_id: bus_a
+    model: "SSD1306 128x32"
+    rotation: 180
+    address: 0x3C
+    pages:
+      - id: tds
+        lambda: |-
+          it.printf(15, 0, id(sz_10), "TDS:");
+          it.printf(15, 11, id(sz_20), "%.1f ppm", id(tds_calibrated).state);
+      - id: tdsuncalibrated
+        lambda: |-
+          it.printf(15, 0, id(sz_10), "TDS BAZ:");
+          it.printf(15, 11, id(sz_20), "%.1f ppm", id(tds_uncalibrated).state);
+      - id: celcius
+        lambda: |-
+          it.printf(15, 0, id(sz_10), "SICAKLIK:");
+          it.printf(15, 11, id(sz_20), "%.1f °", id(tds_sicaklik).state);
+i2c:
+  - id: bus_a
+    sda: 21
+    scl: 22
+    scan: true
+
+ads1115:
+  - address: 0x48
+    id: ads1
+    i2c_id: bus_a
+
+switch:
+  - platform: gpio
+    pin: GPIO19
+    id: ntc_vcc
+
+sensor:
+  - platform: ntc
+    sensor: resistance_sensor
+    calibration:
+      b_constant: 3950
+      reference_temperature: 25°C
+      reference_resistance: 10kOhm
+    name: "Mutfak Su Sıcaklığı"
+    id: tds_sicaklik
+
+  - platform: resistance
+    id: resistance_sensor
+    sensor: temp_raw
+    configuration: DOWNSTREAM
+    resistor: 10kOhm
+    name: Resistance Sensor
+    internal: true
+
+  - platform: ads1115
+    multiplexer: 'A1_GND'
+    gain: 4.096
+    name: "Sıcaklık Raw Deger"
+    ads1115_id: ads1
+    id: temp_raw
+    update_interval: never
+    unit_of_measurement: "v"
+    accuracy_decimals: 3
+    internal: true
+
+  - platform: ads1115
+    multiplexer: 'A0_GND'
+    gain: 4.096
+    name: "Arıtma Raw Deger"
+    ads1115_id: ads1
+    id: tds01_raw
+    update_interval: never
+    unit_of_measurement: "v"
+    accuracy_decimals: 3
+    internal: true
+
+  - platform: template
+    name: "Mutfak Su Voltajı"
+    id: temp01_comp_v
+    unit_of_measurement: 'v'
+    accuracy_decimals: 3
+    lambda: 'return ((id(tds01_raw).state) / (1 + (0.02 * (id(tds_sicaklik).state - 25.0))));' # 15 sicaklik simdilik sabit
+    update_interval: never
+    internal: true
+
+  - platform: template
+    name: "Mutfak Su Temizligi Raw"
+    id: tds_uncalibrated
+    icon: "hass:water-opacity"
+    unit_of_measurement: 'PPM'
+    accuracy_decimals: 0    
+    update_interval: never
+    lambda: return (133.42*(id(temp01_comp_v).state)*(id(temp01_comp_v).state)*(id(temp01_comp_v).state) - 255.86*(id(temp01_comp_v).state)*(id(temp01_comp_v).state) + 857.39*(id(temp01_comp_v).state))*0.5;
+
+  - platform: template
+    name: "Mutfak Su Temizligi"
+    id: tds_calibrated
+    icon: "hass:water-opacity"
+    unit_of_measurement: 'PPM'
+    accuracy_decimals: 0    
+    update_interval: never
+    lambda: return (133.42*(id(temp01_comp_v).state)*(id(temp01_comp_v).state)*(id(temp01_comp_v).state) - 255.86*(id(temp01_comp_v).state)*(id(temp01_comp_v).state) + 857.39*(id(temp01_comp_v).state))*0.5;
+    filters:
+    - calibrate_linear:
+        - 22 -> 22
+        - 1040 -> 700
+    - sliding_window_moving_average:
+        window_size: 5
+        send_every: 1
+
+binary_sensor:
+  - platform: gpio
+    pin:
+      number: GPIO0
+      mode:
+        input: true
+        pullup: true
+    id: buton
+    on_press:
+      - display.page.show_next: ekran
+      - component.update: ekran
+
+interval:
+  - interval: 5s
+    then:
+      - switch.turn_on: ntc_vcc
+      - component.update: tds01_raw
+      - component.update: temp01_comp_v
+      - component.update: temp_raw
+      - component.update: tds_uncalibrated
+      - component.update: tds_calibrated
+      - switch.turn_off: ntc_vcc
